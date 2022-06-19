@@ -4237,13 +4237,13 @@ type_datetime_precision -> Option<String>:
   ;
 
 func_datetime_precision -> Option<String>:
-          /* empty */                { None }
-        | '(' ')'                    { Some(String::from("()")) }
-        | '(' 'NUM' ')'
-           {
-              Some(String::from($lexer.span_str($2.as_ref().unwrap().span())).to_string())
-           }
-        ;
+    /* empty */                { None }
+  | '(' ')'                    { Some(String::from("()")) }
+  | '(' 'NUM' ')'
+     {
+        Some(String::from($lexer.span_str($2.as_ref().unwrap().span())).to_string())
+     }
+;
 
 charset_name -> String:
     ident_or_text 
@@ -6072,76 +6072,77 @@ opt_savepoint ->  bool:
 ;
 
 create -> Create:
-          'CREATE' 'DATABASE' opt_if_not_exists ident opt_create_database_options
-          {
-		Create::CreateDatabase(Box::new(
-			CreateDatabase{
-				is_not_exists: $3,
-				database_name: $4.0,
-				opt_create_database_options: $5,
-			}
-		))
-          }
-        ;
+  'CREATE' 'DATABASE' opt_if_not_exists ident opt_create_database_options
+    {
+      Create::CreateDatabase(Box::new(
+        CreateDatabase{
+          is_not_exists: $3,
+          database_name: $4.0,
+          opt_create_database_options: $5,
+        }
+      ))
+    }
+;
 
 opt_if_not_exists -> bool:
-          /* empty */   { false }
-        | 'IF' not 'EXISTS' { true }
-        ;
+  /* empty */   { false }
+  | 'IF' not 'EXISTS' { true }
+;
 
 opt_create_database_options -> Vec<CreateDatabaseOption>:
-          /* empty */ { vec![] }
-        | create_database_options { $1 }
-        ;
+    /* empty */ { vec![] }
+  | create_database_options { $1 }
+;
 
 create_database_options -> Vec<CreateDatabaseOption>:
-          create_database_option
-          {
-          	vec![$1]
-          }
-        | create_database_options create_database_option
-        {
-        	$1.push($2);
-        	$1
-        }
-        ;
+    create_database_option
+    {
+  	  vec![$1]
+    }
+  | create_database_options create_database_option
+    {
+	    $1.push($2);
+	    $1
+    }
+;
 
 create_database_option -> CreateDatabaseOption:
-          default_collation
-          {
-            $1
-          }
-        | default_charset
-          {
-            $1
-          }
-        | default_encryption
-          {
-            $1
-          }
-        ;
+    default_collation
+    {
+      $1
+    }
+  | default_charset
+    {
+      $1
+    }
+  | default_encryption
+    {
+      $1
+    }
+;
 
 default_collation -> CreateDatabaseOption:
-          opt_default 'COLLATE' opt_equal collation_name {
-          	let is_default = match $1 {
-          		Some(_) => true,
-          		None => false,
-          	};
-          	let is_equal = match $3 {
-          		Some(_) => true,
-          		None => false,
-          	};
+  opt_default 'COLLATE' opt_equal collation_name 
+  {
+    let is_default = match $1 {
+    	Some(_) => true,
+    	None => false,
+    };
+    let is_equal = match $3 {
+    	Some(_) => true,
+    	None => false,
+    };
 		CreateDatabaseOption::DefaultCollation(DefaultCollation{
 		    is_default: is_default,
 		    is_equal: is_equal,
 		    collation_name: $4,
 		})
-          }
-        ;
+  }
+;
 
 default_charset -> CreateDatabaseOption:
-          opt_default character_set opt_equal charset_name
-          {
+  opt_default character_set opt_equal charset_name
+  {
 		let is_default = match $1 {
 			Some(_) => true,
 			None => false,
@@ -6155,27 +6156,355 @@ default_charset -> CreateDatabaseOption:
 		    is_equal: is_equal,
 		    charset_name: $4,
 		})
-          }
-        ;
+  }
+;
 
 default_encryption -> CreateDatabaseOption:
-          opt_default 'ENCRYPTION' opt_equal 'TEXT_STRING'
-          {
-		let is_default = match $1 {
-			Some(_) => true,
-			None => false,
-		};
-		let is_equal = match $3 {
-			Some(_) => true,
-			None => false,
-		};
-		CreateDatabaseOption::DefaultEncryption(DefaultEncryption{
-		    is_default: is_default,
-		    is_equal: is_equal,
-		    encryption: String::from($lexer.span_str($4.as_ref().unwrap().span())),
-		})
-          }
-        ;
+  opt_default 'ENCRYPTION' opt_equal 'TEXT_STRING'
+  {
+    let is_default = match $1 {
+    	Some(_) => true,
+    	None => false,
+    };
+    let is_equal = match $3 {
+    	Some(_) => true,
+    	None => false,
+    };
+    CreateDatabaseOption::DefaultEncryption(DefaultEncryption{
+        is_default: is_default,
+        is_equal: is_equal,
+        encryption: String::from($lexer.span_str($4.as_ref().unwrap().span())),
+    })
+  }
+;
+
+create_table_stmt -> CreateTable:
+    CREATE opt_temporary TABLE opt_if_not_exists table_ident
+    '(' table_element_list ')' opt_create_table_options_etc
+    {
+      $$= NEW_PTN PT_create_table_stmt(YYMEM_ROOT, $2, $4, $5,
+                                       $7,
+                                       $9.opt_create_table_options,
+                                       $9.opt_partitioning,
+                                       $9.on_duplicate,
+                                       $9.opt_query_expression);
+    }
+  | CREATE opt_temporary TABLE opt_if_not_exists table_ident
+    opt_create_table_options_etc
+    {
+      $$= NEW_PTN PT_create_table_stmt(YYMEM_ROOT, $2, $4, $5,
+                                       NULL,
+                                       $6.opt_create_table_options,
+                                       $6.opt_partitioning,
+                                       $6.on_duplicate,
+                                       $6.opt_query_expression);
+    }
+  | CREATE opt_temporary TABLE opt_if_not_exists table_ident
+    LIKE table_ident
+    {
+      $$= NEW_PTN PT_create_table_stmt(YYMEM_ROOT, $2, $4, $5, $7);
+    }
+  | CREATE opt_temporary TABLE opt_if_not_exists table_ident
+    '(' LIKE table_ident ')'
+    {
+      $$= NEW_PTN PT_create_table_stmt(YYMEM_ROOT, $2, $4, $5, $8);
+    }
+;
+
+opt_temporary -> bool:
+    /* empty */ { false }
+  | TEMPORARY   { true  }
+;
+
+table_element_list -> Vec<TableElem>:
+    table_element
+    {
+      $$= NEW_PTN Mem_root_array<PT_table_element *>(YYMEM_ROOT);
+      if ($$ == NULL || $$->push_back($1))
+        MYSQL_YYABORT; // OOM
+    }
+  | table_element_list ',' table_element
+    {
+      $$= $1;
+      if ($$->push_back($3))
+        MYSQL_YYABORT; // OOM
+    }
+;
+
+table_element -> TableElem:
+    column_def            
+    { 
+      TableElem::ColumnDef($1) 
+    }
+  | table_constraint_def  
+    { 
+      TableElem::ConstraintDef($1) 
+    }
+;
+
+column_def -> ColumnDef:
+    ident field_def opt_references
+    {
+      ColumnDef {
+        ident: $1.0,
+        field_def: $2,       
+        opt_ref: $3,
+      }
+    }
+  ;
+
+field_def -> FieldDef:
+    type opt_column_attribute_list
+    {
+      $$= NEW_PTN PT_field_def($1, $2);
+    }
+  | type opt_collate opt_generated_always
+    AS '(' expr ')'
+    opt_stored_attribute opt_column_attribute_list
+    {
+      auto *opt_attrs= $9;
+      if ($2 != NULL)
+      {
+        if (opt_attrs == NULL)
+        {
+          opt_attrs= NEW_PTN
+            Mem_root_array<PT_column_attr_base *>(YYMEM_ROOT);
+        }
+        auto *collation= NEW_PTN PT_collate_column_attr(@2, $2);
+        if (opt_attrs == nullptr || collation == nullptr ||
+            opt_attrs->push_back(collation))
+          MYSQL_YYABORT; // OOM
+      }
+      $$= NEW_PTN PT_generated_field_def($1, $6, $8, opt_attrs);
+    }
+;
+
+opt_generated_always -> bool:
+    /* empty */         { false }
+  | GENERATED ALWAYS    { bool }
+;
+
+opt_stored_attribute -> StoredAttr:
+    /* empty */ { StoredAttr::VIRTUAL }
+  | VIRTUAL     { StoredAttr::VIRTUAL }
+  | STORED      { StoredAttr::STORED  }
+;
+
+opt_references -> bool:
+    /* empty */      { false }
+  |  references
+    {
+      /* Currently we ignore FK references here: */
+      true
+    }
+;
+
+opt_column_attribute_list -> Option<Vec<ColumnAttr>>:
+    /* empty */             { None }
+  | column_attribute_list
+    {
+      Some($1)
+    }
+;
+
+column_attribute_list -> ColumnAttrs:
+    column_attribute_list column_attribute
+    {
+      $1.push($2);
+      $1 
+    }
+  | column_attribute
+    {
+      vec![$1] 
+    }
+  ;
+
+column_attribute -> ColumnAttr:
+    NULL
+    {
+      ColumnAttr::Null
+    }
+  | not NULL
+    {
+      ColumnAttr::NotNull
+    }
+  | not SECONDARY
+    {
+      ColumnAttr::NotSecondary
+    }
+  | DEFAULT now_or_signed_literal
+    {
+      ColumnAttr::DefaultNowSignedLiteral
+    }
+  | DEFAULT '(' expr ')'
+    {
+      ColumnAttr::DefaultExpr($3)
+    }
+  | ON UPDATE now
+    {
+      ColumnAttr::OnUpdateNow($3)
+    }
+  | AUTO_INC
+    {
+      ColumnAttr::AutoInc
+    }
+  | SERIAL DEFAULT VALUE
+    {
+      ColumnAttr::SerialDefaultValue
+    }
+  | opt_primary KEY
+    {
+      ColumnAttr::PrimaryKey
+    }
+  | UNIQUE
+    {
+      ColumnAttr::Unique
+    }
+  | UNIQUE KEY
+    {
+      ColumnAttr::Unique
+    }
+  | COMMENT TEXT_STRING
+    {
+      ColumnAttr::Comment($2)
+    }
+  | COLLATE collation_name
+    {
+      ColumnAttr::Collation($2)
+    }
+  | COLUMN_FORMAT column_format
+    {
+      ColumnAttr::ColumnFormat($2)
+    }
+  | STORAGE storage_media
+    {
+      ColumnAttr::StorageMedia($2)
+    }
+  | SRID real_ulonglong_num
+    {
+      ColumnAttr::Srid($2)
+    }
+  | opt_constraint_name check_constraint
+    /* See the next branch for [NOT] ENFORCED. */
+    {
+      ColumnAttr::CheckConstraint(($1, $2))
+    }
+  | constraint_enforcement
+    /*
+      This branch is needed to workaround the need of a lookahead of 2 for
+      the grammar:
+       { [NOT] NULL | CHECK(...) [NOT] ENFORCED } ...
+      Note: the column_attribute_list rule rejects all unexpected
+            [NOT] ENFORCED sequences.
+    */
+    {
+      ColumnAttr::ConstraintEnforcement($1)
+    }
+  | ENGINE_ATTRIBUTE opt_equal json_attribute
+    {
+      ColumnAttr::EngineAttr($3)
+    }
+  | SECONDARY_ENGINE_ATTRIBUTE opt_equal json_attribute
+    {
+      ColumnAttr::SecondaryEngineAttr($3)
+    }
+  | visibility
+    {
+      ColumnAttr::Visibility($1)
+    }
+;
+
+now -> String:
+  NOW func_datetime_precision
+  {
+  }
+;
+
+now_or_signed_literal -> String:
+    now
+    {
+    }
+  | signed_literal_or_null
+;
+
+signed_literal_or_null -> String:
+    signed_literal
+  | null_as_literal
+;
+
+null_as_literal -> String:
+  NULL
+  {
+    "NULL"
+  }
+;
+
+column_format -> ColumnFormat:
+    DEFAULT   { ColumnFormat::Default }
+  | FIXED     { ColumnForamt::Fixed   }
+  | DYNAMIC   { ColumnFormat::Dynamic }
+;
+
+storage_media -> StroageMedia:
+    DEFAULT   { StorageMedia::DEFAULT }
+  | DISK      { StorageMedia::DISK    }
+  | MEMORY    { StorageMedia::Memory  }
+;
+
+
+table_constraint_def:
+    key_or_index opt_index_name_and_type '(' key_list_with_expression ')'
+    opt_index_options
+    {
+      $$= NEW_PTN PT_inline_index_definition(KEYTYPE_MULTIPLE,
+                                             $2.name, $2.type, $4, $6);
+    }
+  | FULLTEXT_SYM opt_key_or_index opt_ident '(' key_list_with_expression ')'
+    opt_fulltext_index_options
+    {
+      $$= NEW_PTN PT_inline_index_definition(KEYTYPE_FULLTEXT, $3, NULL,
+                                             $5, $7);
+    }
+  | SPATIAL_SYM opt_key_or_index opt_ident '(' key_list_with_expression ')'
+    opt_spatial_index_options
+    {
+      $$= NEW_PTN PT_inline_index_definition(KEYTYPE_SPATIAL, $3, NULL, $5, $7);
+    }
+  | opt_constraint_name constraint_key_type opt_index_name_and_type
+    '(' key_list_with_expression ')' opt_index_options
+    {
+      /*
+        Constraint-implementing indexes are named by the constraint type
+        by default.
+      */
+      LEX_STRING name= $3.name.str != NULL ? $3.name : $1;
+      $$= NEW_PTN PT_inline_index_definition($2, name, $3.type, $5, $7);
+    }
+  | opt_constraint_name FOREIGN KEY_SYM opt_ident '(' key_list ')' references
+    {
+      $$= NEW_PTN PT_foreign_key_definition($1, $4, $6, $8.table_name,
+                                            $8.reference_list,
+                                            $8.fk_match_option,
+                                            $8.fk_update_opt,
+                                            $8.fk_delete_opt);
+    }
+  | opt_constraint_name check_constraint opt_constraint_enforcement
+    {
+      $$= NEW_PTN PT_check_constraint($1, $2, $3);
+      if ($$ == nullptr) MYSQL_YYABORT; // OOM
+    }
+;
+
+check_constraint:
+  CHECK_SYM '(' expr ')' { $$= $3; }
+;
+
+opt_constraint_name:
+    /* empty */          { $$= NULL_STR; }
+  | CONSTRAINT opt_ident { $$= $2; }
+;
+
+
 
 %%
 
