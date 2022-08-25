@@ -283,11 +283,18 @@ impl MySQLServer {
         collect_sql_processed_duration!(self, "COM_INIT_DB", ep.as_str(), earlier);
 
         if res.1 {
+<<<<<<< Updated upstream
             if is_send_ok {
                 self.client.pkt.write_ok().await.map_err(|e| Error::new(ErrorKind::Protocol(e)))
             } else {
                 Ok(())
             }
+=======
+            req.framed
+                .send(PacketSend::Encode(ok_packet()[4..].into()))
+                .await
+                .map_err(ErrorKind::from)?;
+>>>>>>> Stashed changes
         } else {
             // supports CLIENT_PROTOCOL_41 default
             // skip sql_state_marker and sql_state packet

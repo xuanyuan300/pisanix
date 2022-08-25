@@ -146,3 +146,179 @@ impl proxy::factory::Proxy for MySQLProxy {
         }
     }
 }
+<<<<<<< Updated upstream
+=======
+
+/// The Context arg required to handle the command
+pub struct ReqContext<T, C> {
+    pub name: String,
+    pub fsm: TransFsm,
+    pub mysql_parser: Arc<Parser>,
+    pub ast_cache: Arc<Mutex<ParserAstCache>>,
+    pub plugin: Option<PluginPhase>,
+    pub metrics_collector: MySQLServerMetricsCollector,
+    // `concurrency_control_rule_idx` is index of concurrency_control rules
+    // `concurrency_control_rule_idx` is required to add permits when the
+    //  concurrency_control layer service is enabled
+    pub concurrency_control_rule_idx: Option<usize>,
+    // The codc for MySQL Protocol
+    pub framed: Framed<T, C>,
+}
+
+/// Handle the return value of the command
+pub struct RespContext {
+    // The endpoint of the backend dababase
+    pub ep: Option<String>,
+    // The duration of handle the command
+    pub duration: Duration,
+}
+
+/// The MySQLService trait is used to handle the mysql command,
+/// Its can be implemeneted by third-party service.
+/// The PisaMySQLService is default implementation in the Pisa-Proxy.
+#[async_trait]
+pub trait MySQLService<T, C> {
+    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn quit(cx: &mut ReqContext<T, C>) -> Result<RespContext, Error>;
+    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+}
+
+/// Start an instance of the `MySQLService`, its used to execute method 
+/// of the `MySQLService` trait 
+pub struct MySQLInstance<S, T, C> {
+    // A service implementing the MySQLSerivce trait to handle mysql command
+    _inner: S,
+    // Mark whether the instance quit
+    is_quit: bool,
+    _phat: PhantomData<(T, C)>,
+}
+
+impl<S, T, C> MySQLInstance<S, T, C>
+where
+    S: MySQLService<T, C>,
+    T: AsyncRead + AsyncWrite + Unpin,
+    C: Decoder<Item = BytesMut, Error = ProtocolError> + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError> + CommonPacket,
+{
+    fn new(inner: S) -> Self {
+        Self { _inner: inner, is_quit: false, _phat: PhantomData }
+    }
+
+    async fn run(&mut self, mut cx: ReqContext<T, C>) -> Result<(), Error>
+    where
+        C: Decoder<Item = BytesMut, Error = ProtocolError> + Encoder<PacketSend<Box<[u8]>>> + CommonPacket,
+    {
+        let db = cx.framed.codec_mut().get_session().get_db();
+        cx.fsm.set_db(db);
+
+        while let Some(data) = cx.framed.next().await {
+            match data {
+                Ok(data) => {
+                    if let Err(err) = self.handle_command(&mut cx, data).await {
+                        let err_info = make_err_packet(MySQLError::new(
+                            2002,
+                            "HY000".as_bytes().to_vec(),
+                            String::from("There is no healthy backend to connect."),
+                        ));
+                        cx.framed
+                            .send(PacketSend::Encode(err_info[4..].into()))
+                            .await
+                            .map_err(ErrorKind::from)?;
+                        error!("exec command err: {:?}", err);
+                    };
+
+                    cx.framed.codec_mut().reset_seq();
+
+                    if let Some(idx) = &cx.concurrency_control_rule_idx {
+                        cx.plugin.as_mut().unwrap().concurrency_control.add_permits(*idx);
+                        cx.concurrency_control_rule_idx = None;
+                    }
+
+                    if self.is_quit {
+                        return Ok(());
+                    }
+                }
+
+                Err(e) => return Err(Error::from(ErrorKind::from(e))),
+            }
+        }
+
+        return Ok(());
+    }
+
+    async fn handle_command(
+        &mut self,
+        cx: &mut ReqContext<T, C>,
+        mut data: BytesMut,
+    ) -> Result<RespContext, Error> {
+        let now = Instant::now();
+        let com = data.get_u8();
+        let payload = data.split();
+
+        if let Err(err) = self.plugin_run(cx, &payload) {
+            let err_info = make_err_packet(MySQLError::new(
+                1047,
+                "08S01".as_bytes().to_vec(),
+                err.to_string(),
+            ));
+            cx.framed.send(PacketSend::Encode(err_info[4..].into())).await.map_err(ErrorKind::from)?;
+            return Ok(RespContext { ep: None, duration: now.elapsed() });
+        }
+
+        match ComType::from(com) {
+            ComType::QUIT => {
+                self.is_quit = true;
+                S::quit(cx).await
+            }
+            ComType::INIT_DB => S::init_db(cx, &payload).await,
+            ComType::QUERY => S::query(cx, &payload).await,
+            ComType::FIELD_LIST => S::field_list(cx, &payload).await,
+            ComType::PING => {
+                cx.framed.send(PacketSend::Encode(ok_packet()[4..].into())).await.map_err(ErrorKind::from)?;
+                return Ok(RespContext { ep: None, duration: now.elapsed() });
+            }
+            ComType::STMT_PREPARE => S::prepare(cx, &payload).await,
+            ComType::STMT_EXECUTE => S::execute(cx, &payload).await,
+            ComType::STMT_CLOSE => S::stmt_close(cx, &payload).await,
+            ComType::STMT_RESET => {
+                cx.framed.send(PacketSend::Encode(ok_packet()[4..].into())).await.map_err(ErrorKind::from)?;
+                return Ok(RespContext { ep: None, duration: now.elapsed() });
+            }
+            x => {
+                let err_info = make_err_packet(MySQLError::new(
+                    1047,
+                    "08S01".as_bytes().to_vec(),
+                    format!("command {} not support", x.as_ref()),
+                ));
+                cx.framed.send(PacketSend::Encode(err_info[4..].into())).await.map_err(ErrorKind::from)?;
+                return Ok(RespContext { ep: None, duration: now.elapsed() });
+            }
+        }
+    }
+
+    fn plugin_run(&mut self, cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), BoxError> {
+        if let Some(plugin) = cx.plugin.as_mut() {
+            let input = unsafe { std::str::from_utf8_unchecked(payload).to_string() };
+
+            plugin.circuit_break.handle(input.clone())?;
+
+            let res = plugin.concurrency_control.handle(input);
+
+            match res {
+                Ok(data) => {
+                    cx.concurrency_control_rule_idx = data.0;
+                    return Ok(());
+                }
+
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(())
+    }
+}
+
+>>>>>>> Stashed changes
