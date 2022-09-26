@@ -21,7 +21,7 @@ enum ScanState {
     Empty,
     TableName,
     Field,
-    Order,
+    Order(OrderDirection),
     Group,
     Where(Vec<String>),
     OnCond(Vec<OnCond>),
@@ -51,6 +51,13 @@ impl FieldMeta {
 pub struct OrderMeta {
     pub span: mysql_parser::Span,
     pub name: String,
+    pub direction: OrderDirection,
+}
+
+#[derive(Debug, Clone)]
+pub enum OrderDirection {
+    Asc,
+    Desc,
 }
 
 #[derive(Debug)]
@@ -234,7 +241,14 @@ impl Transformer for RewriteMetaData {
                 }
             }
 
-            Node::OrderClause(_) => self.state = ScanState::Order,
+            Node::OrderExpr(val) => {
+                if let Some(direction) = &val.direction {
+                    if direction == "DESC" {
+                        self.state = ScanState::Order(OrderDirection::Desc);
+                    }
+                }
+                self.state = ScanState::Order(OrderDirection::Asc);
+            }
 
             Node::GroupClause(_) => self.state = ScanState::Group,
 
@@ -269,8 +283,9 @@ impl Transformer for RewriteMetaData {
                     ScanState::Field => {
                         self.push_field(FieldMeta::Ident { span: *span, name: value.to_string() })
                     }
-                    ScanState::Order => {
-                        self.push_order(OrderMeta { span: *span, name: value.to_string() })
+                    ScanState::Order(direction) => {
+                        let direction = direction.clone();
+                        self.push_order(OrderMeta { span: *span, name: value.to_string(), direction })
                     }
                     ScanState::Group => {
                         self.push_group(GroupMeta { span: *span, name: value.to_string() })
