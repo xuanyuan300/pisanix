@@ -519,3 +519,17 @@ mod test {
         }
     }
 }
+
+pub struct PlanExpr<'a>(&'a Expr);
+impl<'a> From<PlanExpr<'a>> for datafusion::logical_expr::Expr {
+   fn from(e: PlanExpr<'a>) -> Self {
+        //assert!(matches!(e.0, Expr::SimpleIdentExpr(..)));
+        if let Expr::SimpleIdentExpr(val) = e.0 {
+            //assert!(matches!(val, Value::Ident { .. }));
+            if let Value::Ident { span: _, value, quoted:_ } = val {
+                return datafusion::logical_expr::Expr::Column(value.as_str().into()) 
+            }
+        }
+        unreachable!()
+   } 
+}
