@@ -38,7 +38,10 @@ pub struct RowPartData {
     pub data: Box<[u8]>,
     pub start_idx: usize,
     pub start_part_idx: usize,
-    pub end_part_idx: usize,
+    //pub end_part_idx: usize,
+    pub part_length: usize,
+    // When protocol is Binary only, null_map to be used
+    pub null_map: Vec<u8>,
 }
 
 crate::gen_row_data!(RowDataTyp, Text(RowDataText), Binary(RowDataBinary));
@@ -83,7 +86,7 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataText<T> {
     fn decode_with_name<V: Value>(&mut self, name: &str) -> value::Result<V> {
         let row_data = self.get_row_data_with_name(name)?;
         match row_data {
-            Some(data) => Value::from(&data.data[data.start_part_idx..data.end_part_idx]),
+            Some(data) => Value::from(&data.data[data.start_part_idx .. data.part_length]),
 
             _ => Ok(None),
         }
@@ -107,7 +110,9 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataText<T> {
                 data: self.buf.as_ref()[idx..idx + (pos + length) as usize].into(),
                 start_idx: idx,
                 start_part_idx: pos as usize,
-                end_part_idx: (pos + length) as usize,
+                //end_part_idx: (pos + length) as usize,
+                part_length: (pos + length) as usize,
+                null_map: vec![],
             }
         ));
     }
@@ -192,6 +197,7 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataBinary<T> {
                 | ColumnType::MYSQL_TYPE_BIT
                 | ColumnType::MYSQL_TYPE_DECIMAL
                 | ColumnType::MYSQL_TYPE_NEWDECIMAL => {
+                    
                     let (length, is_null, pos) = length_encode_int(&self.buf.as_ref()[start_pos..]);
                     (length, is_null, pos)
                 }
@@ -239,12 +245,15 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataBinary<T> {
 
                 // Need to add packet header and null_map to returnd data
                 let raw_data = &self.buf.as_ref()[start_pos + pos as usize..(start_pos + pos as usize + length as usize)];
+                println!("ssss {:?}", &raw_data);
                 return Ok(Some(
                     RowPartData { 
                         data: raw_data.into(), 
                         start_idx: start_pos, 
                         start_part_idx: pos as usize, 
-                        end_part_idx: (pos + length) as usize,
+                        //end_part_idx: (pos + length) as usize,
+                        part_length: (pos + length) as usize,
+                        null_map: self.null_map.clone(),
                     }
                 )) 
             }

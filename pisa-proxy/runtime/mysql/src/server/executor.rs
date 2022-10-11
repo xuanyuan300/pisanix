@@ -149,7 +149,9 @@ where
         });
 
         if let Some(_) = avg_change {
-            header[4] = header[4] - 1;
+            if is_binary {
+                header[4] = header[4] - 1;
+            }
         }
         
         let _ = req
@@ -229,7 +231,8 @@ where
                     row_data.with_buf(&x[4..]);
                     if is_binary {
                         let count = row_data.decode_with_name::<u64>(count_field).unwrap().unwrap();
-                        let sum = row_data.decode_with_name::<u64>(sum_field).unwrap().unwrap();
+                        let sum = row_data.decode_with_name::<String>(sum_field).unwrap().unwrap();
+                        let sum = sum.parse::<u64>().unwrap();
                         (count, sum)
                     } else {
                         let count = row_data.decode_with_name::<String>(count_field).unwrap().unwrap();
@@ -244,7 +247,8 @@ where
                 let count: u64 = avg_chunk.par_iter().map(|x| x.0).sum();
                 let sum: u64 = avg_chunk.par_iter().map(|x| x.1).sum();
 
-                let _ = chunk.par_iter_mut().map(|x| {
+                let _ = chunk.iter_mut().map(|x| {
+                    println!("ooooooo chunk {:?}, count {:?}, sum {:?}", &x[..], count, sum);
                     let mut row_data = row_data.clone();
                     let mut data = x.split_off(4);
                     row_data.with_buf(&data[..]);
@@ -252,17 +256,37 @@ where
                     let count_data = row_data.get_row_data_with_name(count_field).unwrap().unwrap();
                     let sum_data = row_data.get_row_data_with_name(sum_field).unwrap().unwrap();
 
-                    for _ in count_data.start_idx .. sum_data.end_part_idx + 2 {
+                    if is_binary {
+                        x.put_u8(0);
+                        let null_map_length = (col_info.len() - 1 + 7 + 2) >> 3;
+                        x.put_slice(&sum_data.null_map);
+                        println!(" xxxx new chunk {:?}", &sum_data.null_map);
+                        // Eat packet header
                         data.get_u8();
+                        // Eat null map
+                        for _ in count_data.null_map.iter() {
+                            data.get_u8();
+                        }
                     }
 
-                    x.extend_from_slice(&data[..]);
+                    let end_idx = count_data.start_idx + count_data.part_length + sum_data.part_length;
+                    println!("ori chunk {:?}, start idx {:?}, end_idx {:?}", &data[..], count_data.start_idx, end_idx);
+                    for _ in count_data.start_idx .. end_idx {
+                        data.get_u8();
+                    }
+                    println!("mmmmmmm chunk {:?}", &data[..]);
+
+                    println!("new chunk {:?}", &data[..]);
 
                     let mut buf = Vec::with_capacity(32);
                     let avg = format!("{:.4}", (sum as f64 / count as f64));
                     buf.put_lenc_int(avg.len() as u64, true);
                     buf.put_slice(avg.as_bytes());
                     x.put_slice(&buf);
+
+                    x.extend_from_slice(&data[..]);
+                    println!("end new chunk {:?}", &x[..]);
+
                 }).collect::<Vec<_>>();
 
                 // When columns has count and sum field only, return directly.
@@ -572,11 +596,23 @@ where
             send_futs.push(f);
         }
 
+        let ro = &req.rewrite_outputs[0];
+        let avg_change = ro.changes.iter().find_map(|x| {
+            if let RewriteChange::AvgChange(change) = x {
+                Some(change)
+            } else {
+                None
+            }
+        });
+
         let mut stmts = Vec::with_capacity(send_futs.len());
         while let Some(conn) = send_futs.next().await {
             let (conn, send_res) = conn.map_err(|e| ErrorKind::Runtime(e.into()))?;
             let stmt = send_res.map_err(ErrorKind::Protocol)?;
             sended_conns.push(conn);
+
+            if let Some(_) = avg_change {
+            }
             stmts.push(stmt);
         }
 
