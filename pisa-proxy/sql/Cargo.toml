@@ -1,0 +1,12 @@
+[package]
+name = "pisanix-sql"
+description = "SQL Query Planner"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.62"
+
+[dependencies]
+mysql_parser = { path = "../parser/mysql" }
+datafusion-common = "15.0.0"
+datafusion-expr = "15.0.0"
+datafusion-sql = "15.0.0"
