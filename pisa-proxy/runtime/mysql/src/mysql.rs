@@ -62,14 +62,15 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct MySQLProxy {
+pub struct MySQLProxy<S: MySQLService> {
     pub proxy_config: ProxyConfig,
     pub node_group: Option<NodeGroup>,
     pub mysql_nodes: Vec<MySQLNode>,
     pub pisa_version: String,
+    _phat: PhantomData<S>,
 }
 
-impl MySQLProxy {
+impl<S: MySQLService> MySQLProxy<S> {
     fn build_route(&self) -> Result<RouteStrategy, Error> {
         let length = self.mysql_nodes.len();
         let (mut rw, mut ro) = (Vec::with_capacity(length), Vec::with_capacity(length));
@@ -159,7 +160,7 @@ impl MySQLProxy {
 }
 
 #[async_trait::async_trait]
-impl proxy::factory::Proxy for MySQLProxy {
+impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S> {
     async fn start(&mut self) -> Result<(), Error> {
         let listener = Listener {
             name: self.proxy_config.name.clone(),
@@ -297,44 +298,41 @@ pub struct RespContext {
 /// Its can be implemeneted by third-party service.
 /// The PisaMySQLService is default implementation in the Pisa-Proxy.
 #[async_trait]
-pub trait MySQLService<T, C> {
-    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn quit(cx: &mut ReqContext<T, C>) -> Result<RespContext, Error>;
-    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+pub trait MySQLService {
+    type T;
+    type C;
+    async fn init_db(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn query(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn prepare(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn execute(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn stmt_close(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn quit(cx: &mut ReqContext<Self::T, Self::C>) -> Result<RespContext, Error>;
+    async fn field_list(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
 }
 
 /// Start an instance of the `MySQLService`, its used to execute method
 /// of the `MySQLService` trait
-pub struct MySQLInstance<S, T, C> {
+pub struct MySQLInstance<S> {
     // A service implementing the MySQLSerivce trait to handle mysql command
     _inner: S,
     // Mark whether the instance quit
     is_quit: bool,
-    _phat: PhantomData<(T, C)>,
+    //_phat: PhantomData<(T, C)>,
 }
 
-impl<S, T, C> MySQLInstance<S, T, C>
+impl<S> MySQLInstance<S>
 where
-    S: MySQLService<T, C>,
-    T: AsyncRead + AsyncWrite + Unpin,
-    C: Decoder<Item = BytesMut, Error = ProtocolError>
+    S: MySQLService,
+    S::T: AsyncRead + AsyncWrite + Unpin,
+    S::C: Decoder<Item = BytesMut, Error = ProtocolError>
         + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
         + CommonPacket,
 {
     fn new(inner: S) -> Self {
-        Self { _inner: inner, is_quit: false, _phat: PhantomData }
+        Self { _inner: inner, is_quit: false }
     }
 
-    async fn run(&mut self, mut cx: ReqContext<T, C>) -> Result<(), Error>
-    where
-        C: Decoder<Item = BytesMut, Error = ProtocolError>
-            + Encoder<PacketSend<Box<[u8]>>>
-            + CommonPacket,
-    {
+    async fn run(&mut self, mut cx: ReqContext<S::T, S::C>) -> Result<(), Error> {
         let db = cx.framed.codec_mut().get_session().get_db();
         cx.fsm.set_db(db);
 
@@ -375,7 +373,7 @@ where
 
     async fn handle_command(
         &mut self,
-        cx: &mut ReqContext<T, C>,
+        cx: &mut ReqContext<S::T, S::C>,
         mut data: BytesMut,
     ) -> Result<RespContext, Error> {
         let now = Instant::now();
@@ -435,7 +433,7 @@ where
         }
     }
 
-    fn plugin_run(&mut self, cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), BoxError> {
+    fn plugin_run(&mut self, cx: &mut ReqContext<S::T, S::C>, payload: &[u8]) -> Result<(), BoxError> {
         if let Some(plugin) = cx.plugin.as_mut() {
             let input = unsafe { std::str::from_utf8_unchecked(payload).to_string() };
 

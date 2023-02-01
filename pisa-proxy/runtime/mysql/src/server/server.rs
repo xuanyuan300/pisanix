@@ -30,8 +30,8 @@ use mysql_protocol::{
     err::ProtocolError,
     mysql_const::*,
     server::{
-        codec::{make_eof_packet, make_err_packet, ok_packet, CommonPacket, PacketSend},
-        err::MySQLError,
+        codec::{make_eof_packet, make_err_packet, ok_packet, CommonPacket, PacketSend, PacketCodec},
+        err::MySQLError, stream::LocalStream,
     },
     session::{Session, SessionMut},
     util::{is_eof, length_encode_int},
@@ -54,7 +54,7 @@ use crate::{
 };
 
 pub struct PisaMySQLService<T, C> {
-    _phat: PhantomData<(T, C)>,
+    _phat: PhantomData<(T, C)>
 }
 
 impl<T, C> PisaMySQLService<T, C>
@@ -193,7 +193,7 @@ where
         Ok(())
     }
 
-    async fn prepare_stmt(req: &mut ReqContext<T, C>, stmt: Stmt) -> Result<(), Error> {
+    async fn prepare_stmt(req: &mut ReqContext<T,C>, stmt: Stmt) -> Result<(), Error> {
         let mut buf = BytesMut::with_capacity(128);
         let mut data = vec![0];
         data.extend_from_slice(&u32::to_le_bytes(stmt.stmt_id));
@@ -620,7 +620,7 @@ where
 }
 
 #[async_trait]
-impl<'a, T, C> MySQLService<T, C> for PisaMySQLService<T, C>
+impl<T, C> MySQLService for PisaMySQLService<T, C>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
     C: Decoder<Item = BytesMut>
@@ -628,10 +628,14 @@ where
         + Send
         + CommonPacket,
 {
-    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    type T = T;
+    type C = C;
+
+    async fn init_db(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
         let db = std::str::from_utf8(payload).unwrap().trim_matches(char::from(0));
         cx.framed.codec_mut().get_session().set_db(db.to_string());
+
 
         if cx.rewriter.is_some() {
             cx.framed
@@ -658,7 +662,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn query(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -682,7 +686,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn prepare(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -729,7 +733,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn execute(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -753,7 +757,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn stmt_close(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
         let stmt_id = LittleEndian::read_u32(payload);
         cx.stmt_cache.remove(stmt_id);
@@ -762,12 +766,12 @@ where
         Ok(RespContext { ep: None, duration: now.elapsed() })
     }
 
-    async fn quit(_cx: &mut ReqContext<T, C>) -> Result<RespContext, Error> {
+    async fn quit(_cx: &mut ReqContext<Self::T, Self::C>) -> Result<RespContext, Error> {
         let now = Instant::now();
         Ok(RespContext { ep: None, duration: now.elapsed() })
     }
 
-    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn field_list(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
