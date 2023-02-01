@@ -620,13 +620,15 @@ where
 }
 
 #[async_trait]
-impl<'a, T, C> MySQLService<T, C> for PisaMySQLService<T, C>
+impl<T, C> MySQLService for PisaMySQLService<T, C> {
+    type T = AsyncRead + AsyncWrite + Unpin + Send;
+    type C = Decoder<Item = BytesMut>
+    + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+    + Send
+    + CommonPacket;
 where
-    T: AsyncRead + AsyncWrite + Unpin + Send,
-    C: Decoder<Item = BytesMut>
-        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
-        + Send
-        + CommonPacket,
+    T: Self::T,
+    C: Self::C,
 {
     async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();

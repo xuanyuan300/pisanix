@@ -297,43 +297,45 @@ pub struct RespContext {
 /// Its can be implemeneted by third-party service.
 /// The PisaMySQLService is default implementation in the Pisa-Proxy.
 #[async_trait]
-pub trait MySQLService<T, C> {
-    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn quit(cx: &mut ReqContext<T, C>) -> Result<RespContext, Error>;
-    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+pub trait MySQLService {
+    type T;
+    type C;
+
+    async fn init_db(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn query(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn prepare(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn execute(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn stmt_close(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn quit(cx: &mut ReqContext<Self::T, Self::C>) -> Result<RespContext, Error>;
+    async fn field_list(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
 }
 
 /// Start an instance of the `MySQLService`, its used to execute method
 /// of the `MySQLService` trait
-pub struct MySQLInstance<S, T, C> {
+pub struct MySQLInstance<S> {
     // A service implementing the MySQLSerivce trait to handle mysql command
     _inner: S,
     // Mark whether the instance quit
     is_quit: bool,
-    _phat: PhantomData<(T, C)>,
 }
 
-impl<S, T, C> MySQLInstance<S, T, C>
+impl<S> MySQLInstance<S>
 where
-    S: MySQLService<T, C>,
-    T: AsyncRead + AsyncWrite + Unpin,
-    C: Decoder<Item = BytesMut, Error = ProtocolError>
+    S: MySQLService,
+    S::T: AsyncRead + AsyncWrite + Unpin,
+    S::C: Decoder<Item = BytesMut, Error = ProtocolError>
         + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
         + CommonPacket,
 {
     fn new(inner: S) -> Self {
-        Self { _inner: inner, is_quit: false, _phat: PhantomData }
+        Self { _inner: inner, is_quit: false }
     }
 
-    async fn run(&mut self, mut cx: ReqContext<T, C>) -> Result<(), Error>
-    where
-        C: Decoder<Item = BytesMut, Error = ProtocolError>
-            + Encoder<PacketSend<Box<[u8]>>>
-            + CommonPacket,
+    async fn run(&mut self, mut cx: ReqContext<S::T, S::C>) -> Result<(), Error>
+    //where
+    //    C: Decoder<Item = BytesMut, Error = ProtocolError>
+    //        + Encoder<PacketSend<Box<[u8]>>>
+    //        + CommonPacket,
     {
         let db = cx.framed.codec_mut().get_session().get_db();
         cx.fsm.set_db(db);
@@ -375,7 +377,7 @@ where
 
     async fn handle_command(
         &mut self,
-        cx: &mut ReqContext<T, C>,
+        cx: &mut ReqContext<S::T, S::C>,
         mut data: BytesMut,
     ) -> Result<RespContext, Error> {
         let now = Instant::now();
@@ -435,7 +437,7 @@ where
         }
     }
 
-    fn plugin_run(&mut self, cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), BoxError> {
+    fn plugin_run(&mut self, cx: &mut ReqContext<S::T, S::C>, payload: &[u8]) -> Result<(), BoxError> {
         if let Some(plugin) = cx.plugin.as_mut() {
             let input = unsafe { std::str::from_utf8_unchecked(payload).to_string() };
 
