@@ -53,24 +53,22 @@ use crate::{
     },
 };
 
-pub struct PisaMySQLService<T, C> {
-    _phat: PhantomData<(T, C)>
-}
+pub struct PisaMySQLService;
 
-impl<T, C> PisaMySQLService<T, C>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send,
-    C: Decoder<Item = BytesMut>
-        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
-        + Send
-        + CommonPacket,
+impl PisaMySQLService
+//where
+//    T: AsyncRead + AsyncWrite + Unpin + Send,
+//    C: Decoder<Item = BytesMut>
+//        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+//        + Send
+//        + CommonPacket,
 {
     pub fn new() -> Self {
-        Self { _phat: PhantomData }
+       Self 
     }
 
     async fn fsm_trigger(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         state_name: TransEventName,
         input_typ: RouteInputTyp,
         raw_sql: &str,
@@ -87,7 +85,7 @@ where
     }
 
     async fn fsm_get_new_conn(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         raw_sql: &str,
         input_typ: RouteInputTyp,
         attrs: &[SessionAttr],
@@ -100,7 +98,7 @@ where
     }
 
     async fn init_db_inner<'b>(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         client_conn: &mut PoolConn<ClientConn>,
         payload: &[u8],
     ) -> Result<(), Error> {
@@ -112,7 +110,7 @@ where
 
         if res.1 {
             req.framed
-                .send(PacketSend::Encode(ok_packet()[4..].into()))
+                .send(PacketSend::<Box<[u8]>>::Encode(ok_packet()[4..].into()))
                 .await
                 .map_err(ErrorKind::from)?;
         } else {
@@ -124,7 +122,7 @@ where
                 String::from_utf8_lossy(&res.0[13..]).to_string(),
             ));
             req.framed
-                .send(PacketSend::Encode(err_info[4..].into()))
+                .send(PacketSend::<Box<[u8]>>::Encode(err_info[4..].into()))
                 .await
                 .map_err(ErrorKind::from)?;
         }
@@ -132,7 +130,7 @@ where
         Ok(())
     }
 
-    async fn prepare_shard_inner(req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), Error> {
+    async fn prepare_shard_inner(req: &mut ReqContext<LocalStream, PacketCodec>, payload: &[u8]) -> Result<(), Error> {
         req.stmt_id.fetch_add(1, Ordering::Relaxed);
         let stmt_id = req.stmt_id.load(Ordering::Relaxed);
         let sess = req.framed.codec_mut().get_session();
@@ -183,7 +181,7 @@ where
     }
 
     async fn prepare_normal_inner(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         client_conn: &mut PoolConn<ClientConn>,
         payload: &[u8],
     ) -> Result<(), Error> {
@@ -193,7 +191,7 @@ where
         Ok(())
     }
 
-    async fn prepare_stmt(req: &mut ReqContext<T,C>, stmt: Stmt) -> Result<(), Error> {
+    async fn prepare_stmt(req: &mut ReqContext<LocalStream, PacketCodec>, stmt: Stmt) -> Result<(), Error> {
         let mut buf = BytesMut::with_capacity(128);
         let mut data = vec![0];
         data.extend_from_slice(&u32::to_le_bytes(stmt.stmt_id));
@@ -210,21 +208,21 @@ where
 
         data.extend_from_slice(&[0, 0, 0]);
 
-        let _ = req.framed.codec_mut().encode(PacketSend::EncodeOffset(data.into(), 0), &mut buf);
+        let _ = req.framed.codec_mut().encode(PacketSend::<Box<[u8]>>::EncodeOffset(data.into(), 0), &mut buf);
 
         if !stmt.params_data.is_empty() {
             for param_data in stmt.params_data {
                 let _ = req
                     .framed
                     .codec_mut()
-                    .encode(PacketSend::EncodeOffset(param_data[4..].into(), buf.len()), &mut buf);
+                    .encode(PacketSend::<Box<[u8]>>::EncodeOffset(param_data[4..].into(), buf.len()), &mut buf);
             }
 
             let eof_packet = make_eof_packet();
             let _ = req
                 .framed
                 .codec_mut()
-                .encode(PacketSend::EncodeOffset(eof_packet[4..].into(), buf.len()), &mut buf);
+                .encode(PacketSend::<Box<[u8]>>::EncodeOffset(eof_packet[4..].into(), buf.len()), &mut buf);
         }
 
         if !stmt.cols_data.is_empty() {
@@ -236,7 +234,7 @@ where
                     if filter_res.1.is_some() {
                         if !filter_res.0.is_empty() {
                             let _ = req.framed.codec_mut().encode(
-                                PacketSend::EncodeOffset(filter_res.0.into(), buf.len()),
+                                PacketSend::<Box<[u8]>>::EncodeOffset(filter_res.0.into(), buf.len()),
                                 &mut buf,
                             );
                         }
@@ -249,27 +247,27 @@ where
                 let _ = req
                     .framed
                     .codec_mut()
-                    .encode(PacketSend::EncodeOffset(col_data[4..].into(), buf.len()), &mut buf);
+                    .encode(PacketSend::<Box<[u8]>>::EncodeOffset(col_data[4..].into(), buf.len()), &mut buf);
             }
 
             let eof_packet = make_eof_packet();
             let _ = req
                 .framed
                 .codec_mut()
-                .encode(PacketSend::EncodeOffset(eof_packet[4..].into(), buf.len()), &mut buf);
+                .encode(PacketSend::<Box<[u8]>>::EncodeOffset(eof_packet[4..].into(), buf.len()), &mut buf);
         }
 
-        req.framed.send(PacketSend::Origin(buf[..].into())).await.map_err(ErrorKind::from)?;
+        req.framed.send(PacketSend::<Box<[u8]>>::Origin(buf[..].into())).await.map_err(ErrorKind::from)?;
 
         Ok(())
     }
 
-    async fn execute_shard_inner(req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), Error> {
+    async fn execute_shard_inner(req: &mut ReqContext<LocalStream, PacketCodec>, payload: &[u8]) -> Result<(), Error> {
         Executor::shard_execute_executor(req, payload).await
     }
 
     async fn execute_inner(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         client_conn: &mut PoolConn<ClientConn>,
         payload: &[u8],
     ) -> Result<RespContext, Error> {
@@ -280,7 +278,7 @@ where
         Ok(RespContext { ep: None, duration: Instant::now().elapsed() })
     }
 
-    async fn shard_query_inner(req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), Error> {
+    async fn shard_query_inner(req: &mut ReqContext<LocalStream, PacketCodec>, payload: &[u8]) -> Result<(), Error> {
         let sess = req.framed.codec_mut().get_session();
         let attrs = build_conn_attrs(sess);
         let raw_sql = std::str::from_utf8(payload).unwrap().trim_matches(char::from(0));
@@ -301,7 +299,7 @@ where
     }
 
     async fn query_inner(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         client_conn: &mut PoolConn<ClientConn>,
         payload: &[u8],
     ) -> Result<(), Error> {
@@ -316,7 +314,7 @@ where
     }
 
     async fn query_inner_get_conn(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         payload: &[u8],
     ) -> Result<PoolConn<ClientConn>, Error> {
         let sess = req.framed.codec_mut().get_session();
@@ -335,7 +333,7 @@ where
     }
 
     fn query_rewrite<'a>(
-        req: &'a mut ReqContext<T, C>,
+        req: &'a mut ReqContext<LocalStream, PacketCodec>,
         sql: &'a str,
     ) -> Result<(bool, RouteInputTyp, ShardingRewriteOutput), Error> {
         let ast = Self::get_ast(req, sql);
@@ -403,7 +401,7 @@ where
 
     // Set charset name
     fn handle_set_stmt<'b: 'a, 'a>(
-        req: &'b mut ReqContext<T, C>,
+        req: &'b mut ReqContext<LocalStream, PacketCodec>,
         stmt: &'a SetOptValues,
     ) -> (bool, RouteInputTyp) {
         match stmt {
@@ -483,7 +481,7 @@ where
         (is_get_conn, RouteInputTyp::Statement)
     }
 
-    fn get_ast(req: &mut ReqContext<T, C>, sql: &str) -> Result<Vec<SqlStmt>, Error> {
+    fn get_ast(req: &mut ReqContext<LocalStream, PacketCodec>, sql: &str) -> Result<Vec<SqlStmt>, Error> {
         let mut ast_cache = req.ast_cache.lock();
         let try_ast = ast_cache.get(sql.to_string());
 
@@ -500,7 +498,7 @@ where
     }
 
     pub async fn handle_query_resultset<'b>(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         mut stream: ResultsetStream<'b>,
     ) -> Result<(), ProtocolError> {
         let data = stream.next().await;
@@ -514,7 +512,7 @@ where
         let ok_or_err = header[4];
 
         if ok_or_err == OK_HEADER || ok_or_err == ERR_HEADER {
-            req.framed.send(PacketSend::Encode(header[4..].into())).await?;
+            req.framed.send(PacketSend::<Box<[u8]>>::Encode(header[4..].into())).await?;
             return Ok(());
         }
 
@@ -525,7 +523,7 @@ where
         let _ = req
             .framed
             .codec_mut()
-            .encode(PacketSend::EncodeOffset(header[4..].into(), 0), &mut buf);
+            .encode(PacketSend::<Box<[u8]>>::EncodeOffset(header[4..].into(), 0), &mut buf);
 
         for _ in 0..cols {
             let data = stream.next().await;
@@ -538,7 +536,7 @@ where
             let _ = req
                 .framed
                 .codec_mut()
-                .encode(PacketSend::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
+                .encode(PacketSend::<Box<[u8]>>::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
         }
 
         // read eof
@@ -547,7 +545,7 @@ where
         let _ = req
             .framed
             .codec_mut()
-            .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
+            .encode(PacketSend::<Box<[u8]>>::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
 
         while let Some(data) = stream.next().await {
             let row = match data {
@@ -558,21 +556,21 @@ where
             let _ = req
                 .framed
                 .codec_mut()
-                .encode(PacketSend::EncodeOffset(row[4..].into(), buf.len()), &mut buf);
+                .encode(PacketSend::<Box<[u8]>>::EncodeOffset(row[4..].into(), buf.len()), &mut buf);
         }
 
         let _ = req
             .framed
             .codec_mut()
-            .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
+            .encode(PacketSend::<Box<[u8]>>::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
 
-        req.framed.send(PacketSend::Origin(buf[..].into())).await?;
+        req.framed.send(PacketSend::<Box<[u8]>>::Origin(buf[..].into())).await?;
 
         Ok(())
     }
 
     pub async fn field_list_inner(
-        req: &mut ReqContext<T, C>,
+        req: &mut ReqContext<LocalStream, PacketCodec>,
         client_conn: &mut PoolConn<ClientConn>,
         payload: &[u8],
     ) -> Result<(), Error> {
@@ -593,20 +591,20 @@ where
             let _ = req
                 .framed
                 .codec_mut()
-                .encode(PacketSend::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
+                .encode(PacketSend::<Box<[u8]>>::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
 
             if is_eof(&data) {
                 break;
             }
         }
 
-        req.framed.send(PacketSend::Origin(buf[..].into())).await.map_err(ErrorKind::from)?;
+        req.framed.send(PacketSend::<Box<[u8]>>::Origin(buf[..].into())).await.map_err(ErrorKind::from)?;
 
         Ok(())
     }
 
     async fn _sharding_command_not_support(
-        cx: &mut ReqContext<T, C>,
+        cx: &mut ReqContext<LocalStream, PacketCodec>,
         command: &str,
     ) -> Result<(), Error> {
         let err_info = make_err_packet(MySQLError::new(
@@ -614,22 +612,22 @@ where
             "08S01".as_bytes().to_vec(),
             format!("command {:?} not support in sharding", command),
         ));
-        cx.framed.send(PacketSend::Encode(err_info[4..].into())).await.map_err(ErrorKind::from)?;
+        cx.framed.send(PacketSend::<Box<[u8]>>::Encode(err_info[4..].into())).await.map_err(ErrorKind::from)?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl<T, C> MySQLService for PisaMySQLService<T, C>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send,
-    C: Decoder<Item = BytesMut>
-        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
-        + Send
-        + CommonPacket,
+impl MySQLService for PisaMySQLService
+//where
+//    T: AsyncRead + AsyncWrite + Unpin + Send,
+//    C: Decoder<Item = BytesMut>
+//        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+//        + Send
+//        + CommonPacket,
 {
-    type T = T;
-    type C = C;
+    type T = LocalStream;
+    type C = PacketCodec;
 
     async fn init_db(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
@@ -639,7 +637,7 @@ where
 
         if cx.rewriter.is_some() {
             cx.framed
-                .send(PacketSend::Encode(ok_packet()[4..].into()))
+                .send(PacketSend::<Box<[u8]>>::Encode(ok_packet()[4..].into()))
                 .await
                 .map_err(ErrorKind::from)?;
             return Ok(RespContext { ep: None, duration: now.elapsed() });
@@ -696,7 +694,7 @@ where
             if let Err(ref err) = res {
                 if let ErrorKind::Protocol(ProtocolError::PrepareError(data)) = err.kind() {
                     cx.framed
-                        .send(PacketSend::Encode(data[4..].into()))
+                        .send(PacketSend::<Box<[u8]>>::Encode(data[4..].into()))
                         .await
                         .map_err(ErrorKind::from)?;
                 }
@@ -724,7 +722,7 @@ where
         if let Err(ref err) = res {
             if let ErrorKind::Protocol(ProtocolError::PrepareError(data)) = err.kind() {
                 cx.framed
-                    .send(PacketSend::Encode(data[4..].into()))
+                    .send(PacketSend::<Box<[u8]>>::Encode(data[4..].into()))
                     .await
                     .map_err(ErrorKind::from)?;
             }
@@ -776,7 +774,7 @@ where
 
         if cx.rewriter.is_some() {
             cx.framed
-                .send(PacketSend::Encode(ok_packet()[4..].into()))
+                .send(PacketSend::<Box<[u8]>>::Encode(ok_packet()[4..].into()))
                 .await
                 .map_err(ErrorKind::from)?;
             return Ok(RespContext { ep: None, duration: now.elapsed() });

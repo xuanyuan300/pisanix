@@ -63,14 +63,25 @@ use crate::{
 
 #[derive(Default)]
 pub struct MySQLProxy<S: MySQLService> {
+    inner: S,
     pub proxy_config: ProxyConfig,
     pub node_group: Option<NodeGroup>,
     pub mysql_nodes: Vec<MySQLNode>,
     pub pisa_version: String,
-    _phat: PhantomData<S>,
+   // _phat: PhantomData<S>,
 }
 
 impl<S: MySQLService> MySQLProxy<S> {
+    pub fn new(inner: S, proxy_config: ProxyConfig, node_group: Option<NodeGroup>, mysql_nodes: Vec<MySQLNode>, pisa_version: String) -> Self {
+        Self {
+            inner,
+            proxy_config,
+            node_group,
+            mysql_nodes,
+            pisa_version,
+        }
+    }
+
     fn build_route(&self) -> Result<RouteStrategy, Error> {
         let length = self.mysql_nodes.len();
         let (mut rw, mut ro) = (Vec::with_capacity(length), Vec::with_capacity(length));
@@ -160,7 +171,14 @@ impl<S: MySQLService> MySQLProxy<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S> {
+impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S> 
+where
+    S: MySQLService,
+    S::T: AsyncRead + AsyncWrite + Unpin,
+    S::C: Decoder<Item = BytesMut, Error = ProtocolError>
+        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+        + CommonPacket,
+{
     async fn start(&mut self) -> Result<(), Error> {
         let listener = Listener {
             name: self.proxy_config.name.clone(),
@@ -221,7 +239,8 @@ impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S> {
             let handshake_framed =
                 Framed::with_capacity(LocalStream::from(socket), handshake_codec, 8196);
 
-            let mut ins = MySQLInstance::new(PisaMySQLService::new());
+            //let mut ins = MySQLInstance::new(PisaMySQLService::new());
+            let mut ins = MySQLInstance::new();
 
             tokio::spawn(async move {
                 let res = handshake(handshake_framed).await;
@@ -312,24 +331,24 @@ pub trait MySQLService {
 
 /// Start an instance of the `MySQLService`, its used to execute method
 /// of the `MySQLService` trait
-pub struct MySQLInstance<S> {
-    // A service implementing the MySQLSerivce trait to handle mysql command
-    _inner: S,
+pub struct MySQLInstance<S: MySQLService> {
     // Mark whether the instance quit
     is_quit: bool,
-    //_phat: PhantomData<(T, C)>,
+    _phat: PhantomData<S>,
 }
 
-impl<S> MySQLInstance<S>
+impl<S: MySQLService> MySQLInstance<S>
 where
-    S: MySQLService,
     S::T: AsyncRead + AsyncWrite + Unpin,
     S::C: Decoder<Item = BytesMut, Error = ProtocolError>
         + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
         + CommonPacket,
 {
-    fn new(inner: S) -> Self {
-        Self { _inner: inner, is_quit: false }
+    fn new() -> Self {
+        Self { 
+            is_quit: false, 
+            _phat: PhantomData, 
+        }
     }
 
     async fn run(&mut self, mut cx: ReqContext<S::T, S::C>) -> Result<(), Error> {
@@ -346,7 +365,7 @@ where
                             String::from("There is no healthy backend to connect."),
                         ));
                         cx.framed
-                            .send(PacketSend::Encode(err_info[4..].into()))
+                            .send(PacketSend::<Box<[u8]>>::Encode(err_info[4..].into()))
                             .await
                             .map_err(ErrorKind::from)?;
                         error!("exec command err: {:?}", err);
@@ -387,7 +406,7 @@ where
                 err.to_string(),
             ));
             cx.framed
-                .send(PacketSend::Encode(err_info[4..].into()))
+                .send(PacketSend::<Box<[u8]>>::Encode(err_info[4..].into()))
                 .await
                 .map_err(ErrorKind::from)?;
             return Ok(RespContext { ep: None, duration: now.elapsed() });
@@ -403,7 +422,7 @@ where
             ComType::FIELD_LIST => S::field_list(cx, &payload).await,
             ComType::PING => {
                 cx.framed
-                    .send(PacketSend::Encode(ok_packet()[4..].into()))
+                    .send(PacketSend::<Box<[u8]>>::Encode(ok_packet()[4..].into()))
                     .await
                     .map_err(ErrorKind::from)?;
                 return Ok(RespContext { ep: None, duration: now.elapsed() });
@@ -413,7 +432,7 @@ where
             ComType::STMT_CLOSE => S::stmt_close(cx, &payload).await,
             ComType::STMT_RESET => {
                 cx.framed
-                    .send(PacketSend::Encode(ok_packet()[4..].into()))
+                    .send(PacketSend::<Box<[u8]>>::Encode(ok_packet()[4..].into()))
                     .await
                     .map_err(ErrorKind::from)?;
                 return Ok(RespContext { ep: None, duration: now.elapsed() });
@@ -425,7 +444,7 @@ where
                     format!("command {} not support", x.as_ref()),
                 ));
                 cx.framed
-                    .send(PacketSend::Encode(err_info[4..].into()))
+                    .send(PacketSend::<Box<[u8]>>::Encode(err_info[4..].into()))
                     .await
                     .map_err(ErrorKind::from)?;
                 return Ok(RespContext { ep: None, duration: now.elapsed() });
@@ -433,7 +452,7 @@ where
         }
     }
 
-    fn plugin_run(&mut self, cx: &mut ReqContext<S::T, S::C>, payload: &[u8]) -> Result<(), BoxError> {
+    fn plugin_run(&mut self, cx: &mut ReqContext<LocalStream, PacketCodec>, payload: &[u8]) -> Result<(), BoxError> {
         if let Some(plugin) = cx.plugin.as_mut() {
             let input = unsafe { std::str::from_utf8_unchecked(payload).to_string() };
 

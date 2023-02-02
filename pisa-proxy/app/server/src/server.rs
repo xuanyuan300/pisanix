@@ -18,6 +18,7 @@ use proxy::{
     proxy::ProxyConfig,
 };
 
+use runtime_mysql::server::PisaMySQLService;
 pub struct PisaProxyFactory {
     pub proxy_config: ProxyConfig,
     pub pisa_config: PisaProxyConfig,
@@ -33,14 +34,25 @@ impl ProxyFactory for PisaProxyFactory {
     fn build_proxy(&self, kind: ProxyKind) -> Box<dyn Proxy + Send> {
         let config = self.proxy_config.clone();
         match kind {
-            ProxyKind::MySQL => Box::new(runtime_mysql::mysql::MySQLProxy {
-                proxy_config: config,
-                mysql_nodes: self.pisa_config.get_mysql().to_vec(),
-                node_group: self.pisa_config.node_group.clone(),
-                pisa_version: self.pisa_config.get_version().to_string(),
+            //ProxyKind::MySQL => Box::new(runtime_mysql::mysql::MySQLProxy {
+            //    proxy_config: config,
+            //    mysql_nodes: self.pisa_config.get_mysql().to_vec(),
+            //    node_group: self.pisa_config.node_group.clone(),
+            //    pisa_version: self.pisa_config.get_version().to_string(),
+            //    // mysql_nodes: self.pisa_config.mysql.as_ref().unwrap().node.as_ref().unwrap().to_vec(),
+            //    // pisa_version: self.pisa_config.version.as_ref().unwrap().to_string(),
+            //}),
+            ProxyKind::MySQL => Box::new(
+                runtime_mysql::mysql::MySQLProxy::new(
+                    PisaMySQLService::new(), 
+                    config, 
+                    self.pisa_config.node_group.clone(),
+                    self.pisa_config.get_mysql().to_vec(),
+                    self.pisa_config.get_version().to_string(),
+                )
                 // mysql_nodes: self.pisa_config.mysql.as_ref().unwrap().node.as_ref().unwrap().to_vec(),
                 // pisa_version: self.pisa_config.version.as_ref().unwrap().to_string(),
-            }),
+            ),
             ProxyKind::ShardingSphereProxy => {
                 Box::new(runtime_shardingsphereproxy::shardingsphereproxy::ShardingSphereProxy {
                     proxy_config: config,
