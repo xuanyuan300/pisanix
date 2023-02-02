@@ -63,22 +63,21 @@ use crate::{
 
 #[derive(Default)]
 pub struct MySQLProxy<S: MySQLService> {
-    inner: S,
     pub proxy_config: ProxyConfig,
     pub node_group: Option<NodeGroup>,
     pub mysql_nodes: Vec<MySQLNode>,
     pub pisa_version: String,
-   // _phat: PhantomData<S>,
+    _service: S,
 }
 
 impl<S: MySQLService> MySQLProxy<S> {
-    pub fn new(inner: S, proxy_config: ProxyConfig, node_group: Option<NodeGroup>, mysql_nodes: Vec<MySQLNode>, pisa_version: String) -> Self {
+    pub fn new(service: S, proxy_config: ProxyConfig, node_group: Option<NodeGroup>, mysql_nodes: Vec<MySQLNode>, pisa_version: String) -> Self {
         Self {
-            inner,
             proxy_config,
             node_group,
             mysql_nodes,
             pisa_version,
+            _service: service,
         }
     }
 
@@ -171,13 +170,9 @@ impl<S: MySQLService> MySQLProxy<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S> 
+impl<S: MySQLService + Send> proxy::factory::Proxy for MySQLProxy<S>
 where
-    S: MySQLService,
-    S::T: AsyncRead + AsyncWrite + Unpin,
-    S::C: Decoder<Item = BytesMut, Error = ProtocolError>
-        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
-        + CommonPacket,
+    S: MySQLService<T=LocalStream, C=PacketCodec>
 {
     async fn start(&mut self) -> Result<(), Error> {
         let listener = Listener {
@@ -240,7 +235,7 @@ where
                 Framed::with_capacity(LocalStream::from(socket), handshake_codec, 8196);
 
             //let mut ins = MySQLInstance::new(PisaMySQLService::new());
-            let mut ins = MySQLInstance::new();
+            
 
             tokio::spawn(async move {
                 let res = handshake(handshake_framed).await;
@@ -254,8 +249,11 @@ where
 
                 let packet_codec = PacketCodec::new(parts.codec, 8196);
                 let io = parts.io;
-
+                
                 let framed = Framed::with_capacity(io, packet_codec, 16384);
+
+                let mut ins = MySQLInstance::<S>::new();
+
                 let context = ReqContext {
                     fsm: TransFsm::new(pool.clone()),
                     route_strategy,
@@ -318,8 +316,10 @@ pub struct RespContext {
 /// The PisaMySQLService is default implementation in the Pisa-Proxy.
 #[async_trait]
 pub trait MySQLService {
-    type T;
-    type C;
+    type T: AsyncRead + AsyncWrite;
+    type C: Decoder<Item = BytesMut, Error = ProtocolError>
+        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+        + CommonPacket;
     async fn init_db(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
     async fn query(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
     async fn prepare(cx: &mut ReqContext<Self::T, Self::C>, payload: &[u8]) -> Result<RespContext, Error>;
@@ -334,19 +334,18 @@ pub trait MySQLService {
 pub struct MySQLInstance<S: MySQLService> {
     // Mark whether the instance quit
     is_quit: bool,
+    //framed: Framed<S::T, S::C>,
     _phat: PhantomData<S>,
 }
 
 impl<S: MySQLService> MySQLInstance<S>
 where
-    S::T: AsyncRead + AsyncWrite + Unpin,
-    S::C: Decoder<Item = BytesMut, Error = ProtocolError>
-        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
-        + CommonPacket,
+    S: MySQLService<T=LocalStream, C=PacketCodec>
 {
     fn new() -> Self {
         Self { 
             is_quit: false, 
+     //       framed,
             _phat: PhantomData, 
         }
     }
