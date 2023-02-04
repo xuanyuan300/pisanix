@@ -19,6 +19,7 @@ use std::{
 
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::debug;
 
@@ -430,12 +431,14 @@ impl SessionMut for ServerHandshakeCodec {
     }
 }
 
-pub async fn handshake(
-    mut framed: Framed<LocalStream, ServerHandshakeCodec>,
-) -> Result<(Framed<LocalStream, ServerHandshakeCodec>, bool), ProtocolError> {
+pub async fn handshake<T: AsyncRead + AsyncWrite + Unpin  +'static>(
+    mut framed: Framed<T, ServerHandshakeCodec>,
+) -> Result<(Framed<T, ServerHandshakeCodec>, bool), ProtocolError> {
     // Send initial handshake
     let initial_handshake = framed.codec().encode_initial_handshake();
     framed.send(initial_handshake).await?;
+
+    use std::any::Any;
 
     loop {
         if let Err(ProtocolError::AuthFailed(data)) = framed.next().await.unwrap() {
@@ -447,7 +450,8 @@ pub async fn handshake(
         match next_state {
             ServerHandshakeStatus::SwitchToTLS => {
                 let mut parts = framed.into_parts();
-                parts.io.make_tls().await?;
+                //parts.io.make_tls().await?;
+                (&mut parts.io as &mut dyn Any).downcast_mut::<LocalStream>().unwrap().make_tls().await?;
 
                 framed = Framed::from_parts(parts);
                 framed.codec_mut().next_handshake_status = ServerHandshakeStatus::ReadResponse;

@@ -220,7 +220,7 @@ impl proxy::factory::Proxy for MySQLProxy {
             let handshake_framed =
                 Framed::with_capacity(LocalStream::from(socket), handshake_codec, 8196);
 
-            let mut ins = MySQLInstance::new(PisaMySQLService::new());
+            //let mut ins = MySQLInstance::new(PisaMySQLService::new());
 
             tokio::spawn(async move {
                 let res = handshake(handshake_framed).await;
@@ -254,9 +254,9 @@ impl proxy::factory::Proxy for MySQLProxy {
                     stmt_id: AtomicU32::new(0),
                 };
 
-                if let Err(e) = ins.run(context).await {
-                    error!("instance run error {:?}", e);
-                }
+                //if let Err(e) = ins.run(context).await {
+                //    error!("instance run error {:?}", e);
+                //}
             });
         }
     }
@@ -298,13 +298,19 @@ pub struct RespContext {
 /// The PisaMySQLService is default implementation in the Pisa-Proxy.
 #[async_trait]
 pub trait MySQLService<T, C> {
-    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
-    async fn quit(cx: &mut ReqContext<T, C>) -> Result<RespContext, Error>;
-    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error>;
+    type Context;
+    async fn init_db(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn query(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn prepare(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn execute(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn stmt_close(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+    async fn quit(cx: &mut Self::Context) -> Result<RespContext, Error>;
+    async fn field_list(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error>;
+}
+
+#[async_trait]
+pub trait MySQLServiceRunner<Cx> {
+    async fn run(&mut self, cx: Cx) -> Result<(), Error> ;
 }
 
 /// Start an instance of the `MySQLService`, its used to execute method
@@ -315,6 +321,7 @@ pub struct MySQLInstance<S, T, C> {
     // Mark whether the instance quit
     is_quit: bool,
     _phat: PhantomData<(T, C)>,
+    framed: Framed<T, C>,
 }
 
 impl<S, T, C> MySQLInstance<S, T, C>
@@ -325,15 +332,34 @@ where
         + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
         + CommonPacket,
 {
-    fn new(inner: S) -> Self {
-        Self { _inner: inner, is_quit: false, _phat: PhantomData }
+    //fn new(inner: S) -> Self {
+    //    Self { _inner: inner, is_quit: false, _phat: PhantomData }
+    //}
+
+    async fn handshake(inner: S, stream: T, codec: ServerHandshakeCodec) -> Self {
+        let handshake_framed =
+        Framed::with_capacity(stream, codec, 8196);
+        let res = handshake(handshake_framed).await;
+        //if let Err(e) = res {
+        //    error!("handshake error {:?}", e);
+        //    return;
+        //}
+
+        let handshake_framed = res.unwrap().0;
+        let parts = handshake_framed.into_parts();
+        let packet_codec = PacketCodec::new(parts.codec, 8196);
+        let io = parts.io;
+        let framed = Framed::with_capacity(io, packet_codec, 16384);
+        
+        MySQLInstance {
+            _inner: inner,
+            is_quit: false,
+            _phat: PhantomData,
+            framed,
+        }
     }
 
-    async fn run(&mut self, mut cx: ReqContext<T, C>) -> Result<(), Error>
-    where
-        C: Decoder<Item = BytesMut, Error = ProtocolError>
-            + Encoder<PacketSend<Box<[u8]>>>
-            + CommonPacket,
+    async fn run(&mut self, mut cx: Cx) -> Result<(), Error>
     {
         let db = cx.framed.codec_mut().get_session().get_db();
         cx.fsm.set_db(db);
@@ -375,7 +401,7 @@ where
 
     async fn handle_command(
         &mut self,
-        cx: &mut ReqContext<T, C>,
+        cx: &mut S::Context,
         mut data: BytesMut,
     ) -> Result<RespContext, Error> {
         let now = Instant::now();
@@ -435,7 +461,7 @@ where
         }
     }
 
-    fn plugin_run(&mut self, cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<(), BoxError> {
+    fn plugin_run(&mut self, cx: &mut S::Context, payload: &[u8]) -> Result<(), BoxError> {
         if let Some(plugin) = cx.plugin.as_mut() {
             let input = unsafe { std::str::from_utf8_unchecked(payload).to_string() };
 

@@ -620,7 +620,7 @@ where
 }
 
 #[async_trait]
-impl<'a, T, C> MySQLService<T, C> for PisaMySQLService<T, C>
+impl<T, C> MySQLService<T, C> for PisaMySQLService<T, C>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
     C: Decoder<Item = BytesMut>
@@ -628,7 +628,8 @@ where
         + Send
         + CommonPacket,
 {
-    async fn init_db(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    type Context = ReqContext<T, C>;
+    async fn init_db(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
         let db = std::str::from_utf8(payload).unwrap().trim_matches(char::from(0));
         cx.framed.codec_mut().get_session().set_db(db.to_string());
@@ -658,7 +659,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn query(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -682,7 +683,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn prepare(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn prepare(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -729,7 +730,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn execute(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn execute(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
@@ -753,7 +754,7 @@ where
         Ok(RespContext { ep, duration: now.elapsed() })
     }
 
-    async fn stmt_close(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn stmt_close(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
         let stmt_id = LittleEndian::read_u32(payload);
         cx.stmt_cache.remove(stmt_id);
@@ -762,12 +763,12 @@ where
         Ok(RespContext { ep: None, duration: now.elapsed() })
     }
 
-    async fn quit(_cx: &mut ReqContext<T, C>) -> Result<RespContext, Error> {
+    async fn quit(_cx: &mut Self::Context) -> Result<RespContext, Error> {
         let now = Instant::now();
         Ok(RespContext { ep: None, duration: now.elapsed() })
     }
 
-    async fn field_list(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
+    async fn field_list(cx: &mut Self::Context, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
 
         if cx.rewriter.is_some() {
